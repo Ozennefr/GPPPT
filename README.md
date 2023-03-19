@@ -1,5 +1,7 @@
 # GPPPT
-A simple one file python script to read a yaml file defining AI process. 
+A simple one file python script that executes AI processes defined in YML. 
+
+GPPPT stands for "processes processes processes", also known as "la règle des trois P".
 
 ## The DSL
 
