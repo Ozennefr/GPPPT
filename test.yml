@@ -1,0 +1,118 @@
+process: 
+  name: WhiskyRecommender
+  entrypoint: ask
+  max_process_length: 20
+  on_max_process_length: fail
+
+agents:
+  manager:
+    roleplay: "As an Whisky expert dedicating his life to recommend perfect whisky matches to people"
+    kind: chat_agent
+    options:
+      model: gpt-3.5-turbo
+      memory: 3
+  worker: 
+    roleplay: "As an Whisky expert dedicating his life to recommend perfect whisky matches to people"
+    kind: chat_agent
+    options:
+      model: gpt-3.5-turbo
+      memory: 3  
+  bookeeper:
+    roleplay: "As an Whisky expert dedicating his life to recommend perfect whisky matches to people"
+    kind: vector_search
+    options: 
+      filename: docsim.feather
+      vector_col: ada_embedding
+      text_col: note_text
+      model: text-embedding-ada-002
+  user:
+    kind: input
+  no_val:
+    kind: mock_agent
+    options:
+      response: No validation Necessary. 
+  mock_worker:
+    kind: mock_agent
+    options:
+      response: lorem ipsum. 
+  mock_manager:
+    kind: mock_agent
+    options:
+      response: yes. 
+      
+variables:
+  note_example: "Colour: bright straw. Nose: pears, gooseberries, apples, general 'orchard fruit' vibes and also some wee touches of hops, citrus and buttered toast. There's an overall more modern, American oak influenced profile on display here. But I find it extremely easy and quietly charming, it's just let down a bit by the 40% (isn't everything?). Mouth: yup, 40% is tough these days. Same lovely profile of easy sweetness and orchard fruits, only here I'd add some yellow plums, apricots and honey. But that low power gives a slight feeling of cardboard as well, sadly. Still, this in a tumbler at almost any time of day would be easy and enjoyable in my view. Finish: on the short side, going towards light fruit teas and golden ales. Some breads and cereals now too. Comments: it's a modern style, quite a long way from the glorious old distillate monster Glen Grants of yesteryear (stay tuned for some of them!) but it's also quiet, humble, easy and charmingly un-showy malt whisky. \nSGP: 541 - 80 points. "
+
+steps:
+  ask:
+    agent: user
+    prompt: "what can i do for you today ?" 
+    validation: 
+      prompt: "Is this demand appropriate ? Start your answwer with Yes or No." 
+      agent: mock_manager
+    on_success: reformulate
+    on_failure: ask
+
+  reformulate:
+    agent: mock_worker
+    prompt: "reformulate the following user request: `{ask_answer}` with your own capabilities in mind. Answer with only the reformulation." 
+    validation: 
+      prompt: "Is the reformulation `{reformulate_answer}` correctly representsd the request {ask_answer}. Start your answer with Yes or No." 
+      agent: mock_manager
+    on_success: detail
+    on_failure: reformulate
+
+  detail:
+    agent: mock_worker
+    prompt: "What are you looking for in a whiskey that fullfils the request `{reformulate_answer}`" 
+    validation: 
+      prompt: "Is this recommendation `{detail_answer}` provide some helpfull guidelines to answer the request `{reformulate_answer}`. Start your answer with Yes or No."
+      agent: mock_manager
+    on_success: hallucinate
+    on_failure: reformulate
+
+  hallucinate:
+    agent: mock_worker
+    prompt: "Write a whisky tasting note, following these guidelines `{detail_answer}`. When writting a note, omit any mention to a specific distillery and do not mention specific pairings. focus on the taste and mouthfeel. Please respond with only the note and follow the format of this example : {note_example}" 
+    validation:  
+      prompt: "Is this tasting note `{hallucinate_answer}` adequate to answer the request `{reformulate_answer}`. Start your answer with Yes or No."
+      agent: mock_manager
+    on_success: lookup
+    on_failure: detail
+
+  lookup:
+    agent: mock_worker
+    prompt: "{hallucinate_answer}"
+    validation:   
+      prompt: "Is this tasting note `{hallucinate_answer}` similar in spirit to `{lookup_answer}`? Don't be to harsh and focus on the general mood and spirit of the note. Start your answer with Yes or No."
+      agent: mock_manager
+    on_success: recommendation
+    on_failure: detail
+
+  recommendation:
+    agent: mock_worker
+    prompt: "Describe how the selected whisky `{lookup_answer}` fits well with the request `{reformulate_answer}`"
+    validation:  
+      prompt: "Is this recommendation `{recommendation_answer}` answering the request `{reformulate_answer}`. Start your answer with Yes or No."
+      agent: mock_manager
+    on_success: stop
+    on_failure: hallucinate
+
+  fail:
+    agent: user
+    prompt: "Sorry, I cannot proceed with the given user request. Let's end the process here. \n\n\n Type any key to strat the process over." 
+    validation: 
+      prompt: "" 
+      agent: no_val
+    on_success: ask
+    on_failure: ask
+    
+  stop:
+    agent: user
+    prompt: "{recommendation_answer}\n\nHere is the complete note : {lookup_answer}. \n\n\n Type any key to start the process over."
+    validation: 
+      prompt: "" 
+      agent: no_val
+    on_success: ask
+    on_failure: ask
+
