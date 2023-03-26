@@ -4,20 +4,25 @@ process:
   max_process_length: 20
   on_max_process_length: fail
 
+agents_plugins:
+  - gpppt_base_agents
+  - gpppt_oai_agents
+
 agents:
   manager:
-    roleplay: "You are a world reknowned whisky expert, very well versed in whisky recommendations. In particular, you are famous for recommending the perfect match, even when th user gives little to no inormation. Most of the time, only one word, one direction, is enough for you to find the match made in haven. You Can answer even the most unusual and strange requests."
-    kind: chat_agent
+    roleplay: "As an Whisky expert dedicating his life to recommend perfect whisky matches to people"
+    kind: chat
     options:
       model: gpt-3.5-turbo
       memory: 3
   worker: 
-    roleplay: "You are a world reknowned whisky expert, very well versed in whisky recommendations. In particular, you are famous for recommending the perfect match, even when th user gives little to no inormation. Most of the time, only one word, one direction, is enough for you to find the match made in haven. You Can answer even the most unusual and strange requests."
-    kind: chat_agent
+    roleplay: "As an Whisky expert dedicating his life to recommend perfect whisky matches to people"
+    kind: chat
     options:
       model: gpt-3.5-turbo
       memory: 3  
   bookeeper:
+    roleplay: "As an Whisky expert dedicating his life to recommend perfect whisky matches to people"
     kind: vector_search
     options: 
       filename: docsim.feather
@@ -27,15 +32,15 @@ agents:
   user:
     kind: input
   no_val:
-    kind: mock_agent
+    kind: mock
     options:
       response: No validation Necessary. 
   mock_worker:
-    kind: mock_agent
+    kind: mock
     options:
       response: lorem ipsum. 
   mock_manager:
-    kind: mock_agent
+    kind: mock
     options:
       response: yes. 
       
@@ -77,7 +82,7 @@ steps:
       prompt: "Is this tasting note `{hallucinate_answer}` adequate to answer the request `{reformulate_answer}`. Start your answer with Yes or No."
       agent: manager
     on_success: lookup
-    on_failure: detail
+    on_failure: reformulate
 
   lookup:
     agent: bookeeper
@@ -86,7 +91,7 @@ steps:
       prompt: "Is this tasting note `{hallucinate_answer}` similar in spirit to `{lookup_answer}`? Don't be to harsh and focus on the general mood and spirit of the note. Start your answer with Yes or No."
       agent: manager
     on_success: recommendation
-    on_failure: detail
+    on_failure: reformulate
 
   recommendation:
     agent: worker
@@ -95,7 +100,7 @@ steps:
       prompt: "Is this recommendation `{recommendation_answer}` answering the request `{reformulate_answer}`. Start your answer with Yes or No."
       agent: manager
     on_success: stop
-    on_failure: hallucinate
+    on_failure: reformulate
 
   fail:
     agent: user
