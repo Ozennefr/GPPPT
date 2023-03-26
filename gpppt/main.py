@@ -1,111 +1,82 @@
 import yaml
-import pandas as pd
-import numpy as np
-import openai
 import typer
-import os
-from dataclasses import dataclass, field
-from typing import Any
 
-openai.api_key = os.environ.get('OPENAI_KEY')
+app = typer.Typer()
 
-@dataclass
-class Agent():
-    name: str
-    kind: str
-    roleplay: str = ''
-    options: dict = field(default_factory=dict)
+def load_agents_from_plugin(plugin_list: list):
+    agnts_constructors = {}
+    for plugin in plugin_list:
+        agnts_constructors.update(__import__(plugin).agents_constructors)
 
-    def __call__(self, prompt, verbose=False):
-        prompt = f'{self.roleplay} {prompt}'  
-        answer = self.prompt(prompt)
-        if verbose:
-            print(f'Process: {prompt}')
-            print(f'{self.name}: {answer}')
-        return answer
+    return(agnts_constructors)
 
-class InputAgent(Agent):
-    def prompt(self, prompt):       
-        print(prompt)
-        return input()
-
-class MockAgent(Agent):
-    def prompt(self, _):       
-        return self.options.get('response', '')
-
-class ChatAgent(Agent):
-    messages: list
-    memory: int
-    model: str
-
-    def __init__(self, *args, **kwargs):
-        super(ChatAgent, self ).__init__(*args, **kwargs)
-
-        self.memory = self.options.get('memory', 1)
-        self.model = self.options['model']
-        self.messages = []
-
-    def prompt(self, prompt): 
-        self.messages.append({"role": "user", "content": prompt})
-        response = openai.ChatCompletion.create(
-            model=self.model,
-            messages=self.messages[-self.memory:],
-            max_tokens=1024, n=1, stop=None, temperature=0.5,
-        )
-        answer = response["choices"][0]["message"]
-        self.messages.append(answer)
-        return answer["content"]
-
-class VectorSearchAgent(Agent):
-    txt_col: list = field(default_factory=list)
-    emb_col: int
-    model: str
-    db: Any
-    
-    def __init__(self, *args, **kwargs):
-        super(VectorSearchAgent, self ).__init__(*args, **kwargs)
-
-        self.emb_col = self.options['vector_col']
-        self.txt_col = self.options['text_col']
-        self.model = self.options['model']
-        self.db = pd.read_feather(self.options['filename']).assign(
-            **{self.emb_col: lambda df: df[self.emb_col].apply(np.array)}
-        )
-
-    def get_embedding(self, text):
-        text = text.replace("\n", " ")
-        return openai.Embedding.create(
-            input = [text], model=self.model
-        )['data'][0]['embedding']
-
-    def prompt(self, prompt):
-        chatbot_vector = self.get_embedding(prompt)
-        similarities = [\
-            np.dot(chatbot_vector, vec) 
-            for vec in self.db[self.emb_col].to_list()
-        ]
-        most_similar_index = np.argmax(similarities)
-        return self.db.iloc[[most_similar_index],:].to_dict('records')[0][self.txt_col]
-
-agents_constructors = {
-    'chat_agent': ChatAgent, 'vector_search': VectorSearchAgent, 'input': InputAgent, 'mock_agent': MockAgent
-}
-
-def parse_agents(agents_def):
+def parse_agents(agents_def, agents_constructors):
     agents = {
         key: agents_constructors[value['kind']](key, **value)
         for key, value in agents_def.items()
     }
     return agents
 
-def execute_process(process_yaml, verbose: bool=False):
+@app.command()
+def parse(process_yaml):
     with open(process_yaml, 'r') as file:
         process = yaml.safe_load(file)
     
-    agents = parse_agents(process["agents"])
+    agents_constructors = load_agents_from_plugin(process['agents_plugins'])
+    agents = parse_agents(process["agents"], agents_constructors)
     max_process_length = process["process"]["max_process_length"]
     entrypoint = process["process"]["entrypoint"]
     variables = process.get("variables", {})
+
+    print("Parsing successful!")
+
+    return agents, entrypoint, process["steps"], variables, max_process_length
+
+@app.command()
+def draw(process_yaml:str, file_path:str):
+    agents, entrypoint, steps, variables, max_process_length = parse(
+        process_yaml
+    )
+    md = f"flowchart TD\n\tsubgraph Agents\n\t\tdirection LR"
+    for agent, color in zip(agents, ['lightblue', 'lightgreen', 'orange', 'pink', 'lightgrey', 'white', 'yellow', 'red', 'green',]):
+        md += f"\n\t\tclassDef {agent} fill:{color}"
+        agent_type = str(type(agents[agent])).replace(
+            "<class '", ""
+        ).replace(
+            "'>", ""
+        )
+        md += f"\n\t\t{agent}({agent} - {agent_type}):::{agent}"
+    md += "\n\tend\n\n\tsubgraph Process"
+
+    for step in steps:
+        on_success = {entrypoint: 'end_of_process(( ))'}.get(
+            steps[step]['on_success'], steps[step]['on_success']
+        )
+        on_failure = {entrypoint: 'end_of_process(( ))'}.get(
+            steps[step]['on_failure'], steps[step]['on_failure']
+        )
+        md += f"\n\t\t{step}(step):::{steps[step]['agent']}"
+        if on_success == on_failure:
+            md += f"\n\t\t{step} --> {on_success}"
+        else:
+            md += f"\n\t\t{step} --> {step}_validation{{{{validation}}}}:::{steps[step]['validation']['agent']}"
+            md += f"\n\t\t{step}_validation --Sucess--> {on_success}"
+            md += f"\n\t\t{step}_validation --Failure--> {on_failure}"
+    
+    md += f"\n\t\tstart_of_process(( )) --> {entrypoint}"
+    md += "\n\tend\n"
+    md +="\n\t style Process fill:white,stroke:white"
+    md +="\n\t style Agents fill:white,stroke:grey"
+
+    with open(file_path, 'w') as file:
+        file.write(md)
+
+
+@app.command()
+def run(process_yaml, verbose: bool=False):
+    agents, entrypoint, steps, variables, max_process_length = parse(
+        process_yaml
+    )
 
     current_step = entrypoint
     context = {}
@@ -113,7 +84,7 @@ def execute_process(process_yaml, verbose: bool=False):
     n_step = 0
     while True:
         n_step += 1
-        step = process["steps"][current_step]
+        step = steps[current_step]
         agent = agents[step['agent']]
         prompt = step["prompt"].format(**context, **variables)
         response = agent(prompt, verbose)
@@ -132,4 +103,4 @@ def execute_process(process_yaml, verbose: bool=False):
             current_step = step.get("on_failure", "fail")
 
 if __name__ == "__main__":
-    typer.run(execute_process)
+    app()
